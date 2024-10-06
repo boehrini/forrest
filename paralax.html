@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced 3D Image Effect</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <!-- Include Three.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Scene, Camera, and Renderer setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000); // Adjusted FOV
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Load textures from external URLs (image and depth map)
+        const textureLoader = new THREE.TextureLoader();
+        const imageTexture = textureLoader.load('https://cdn1.epicgames.com/ue/product/Screenshot/3-1920x1080-5ffc2ef0b2f7ccb5e05e19ddffe2d86c.jpg?resize=1&w=1920');
+        const depthTexture = textureLoader.load('https://i.imgur.com/O9slz4E.png');
+
+        // Create a larger plane geometry with increased segmentation
+        const geometry = new THREE.PlaneGeometry(10, 6, 512, 512); // Increased size and segmentation
+
+        // Custom ShaderMaterial to apply depth map for displacement and smooth edge effect
+        const material = new THREE.ShaderMaterial({
+            uniforms: {
+                texture1: { value: imageTexture },
+                depthMap: { value: depthTexture },
+                mouse: { value: new THREE.Vector2(0.5, 0.5) },
+                borderSoftness: { value: 0.5 }
+            },
+            vertexShader: `
+                uniform sampler2D depthMap;
+                uniform vec2 mouse;
+                varying vec2 vUv;
+
+                void main() {
+                    vUv = uv;
+
+                    // Retrieve depth value and smooth it using multiple samples for better blending
+                    float depth = texture2D(depthMap, vUv).r;
+                    float depthLeft = texture2D(depthMap, vUv + vec2(-0.01, 0.0)).r;
+                    float depthRight = texture2D(depthMap, vUv + vec2(0.01, 0.0)).r;
+                    float depthUp = texture2D(depthMap, vUv + vec2(0.0, 0.01)).r;
+                    float depthDown = texture2D(depthMap, vUv + vec2(0.0, -0.01)).r;
+
+                    // Averaging the neighboring depths to smooth out transitions
+                    float smoothedDepth = (depth + depthLeft + depthRight + depthUp + depthDown) / 5.0;
+
+                    // Adjusting the position using the smoothed depth
+                    vec3 displacedPosition = position;
+                    displacedPosition.z += (smoothedDepth - 0.5) * 3.0; // Stronger z-displacement for more pronounced parallax
+
+                    // Apply rotation based on mouse interaction only
+                    float rotationStrength = 1.0; // Adjust this value for stronger rotation effect
+                    float angleX = clamp((mouse.y - 0.5) * rotationStrength, -0.3, 0.3); // Limit X rotation
+                    float angleY = clamp((mouse.x - 0.5) * rotationStrength, -0.3, 0.3); // Limit Y rotation
+
+                    // Create rotation matrices for X and Y rotations
+                    mat4 rotationX = mat4(
+                        1.0, 0.0, 0.0, 0.0,
+                        0.0, cos(angleX), -sin(angleX), 0.0,
+                        0.0, sin(angleX), cos(angleX), 0.0,
+                        0.0, 0.0, 0.0, 1.0
+                    );
+
+                    mat4 rotationY = mat4(
+                        cos(angleY), 0.0, sin(angleY), 0.0,
+                        0.0, 1.0, 0.0, 0.0,
+                        -sin(angleY), 0.0, cos(angleY), 0.0,
+                        0.0, 0.0, 0.0, 1.0
+                    );
+
+                    // Combine the rotations
+                    displacedPosition = (rotationY * rotationX * vec4(displacedPosition, 1.0)).xyz;
+
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(displacedPosition, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D texture1;
+                uniform float borderSoftness;
+                varying vec2 vUv;
+
+                void main() {
+                    // Get the pixel color from the texture
+                    vec4 color = texture2D(texture1, vUv);
+
+                    // Smooth alpha blending based on the distance from the edges
+                    float fadeFactor = smoothstep(0.0, borderSoftness, vUv.x) * 
+                                       smoothstep(0.0, borderSoftness, vUv.y) * 
+                                       smoothstep(0.0, borderSoftness, 1.0 - vUv.x) * 
+                                       smoothstep(0.0, borderSoftness, 1.0 - vUv.y);
+
+                    // Apply the border fade effect to the color's alpha
+                    color.a *= fadeFactor;
+
+                    gl_FragColor = color;
+                }
+            `,
+            transparent: true, // Enable transparency for smooth borders
+        });
+
+        // Create a mesh and add it to the scene
+        const mesh = new THREE.Mesh(geometry, material);
+        scene.add(mesh);
+
+        // Set the camera position
+        camera.position.z = 8; // Adjusted camera position to fit larger plane
+
+        // Event listener to track mouse movements
+        window.addEventListener('mousemove', (event) => {
+            const mouseX = (event.clientX / window.innerWidth);
+            const mouseY = 1 - (event.clientY / window.innerHeight);
+
+            // Update mouse coordinates in shader uniforms
+            material.uniforms.mouse.value.x = mouseX;
+            material.uniforms.mouse.value.y = mouseY;
+        });
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Adjust camera and renderer on window resize
+        window.addEventListener('resize', () => {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+        });
+    </script>
+</body>
+</html>
